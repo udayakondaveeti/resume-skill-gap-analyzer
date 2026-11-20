@@ -1,0 +1,1 @@
+# AI-Based Resume Matching and Skill Gap Analysis Using Semantic NLP and Large Language Modelsecho.echo Evaluates candidate resumes against job skill requirements using semantic NLP similarity and highlights skill gaps.echo.echo ## Run Locallyecho.echo pip install -r requirements.txtecho python analyzer.py
