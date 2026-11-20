@@ -1,6 +1,20 @@
+import argparse
 import os
 import re
+from pathlib import Path
 from typing import List, Dict, Tuple
+
+try:
+    from pypdf import PdfReader
+    HAS_PYPDF = True
+except ImportError:
+    HAS_PYPDF = False
+
+try:
+    from docx import Document
+    HAS_DOCX = True
+except ImportError:
+    HAS_DOCX = False
 
 try:
     from sklearn.metrics.pairwise import cosine_similarity
@@ -28,6 +42,43 @@ COMMON_SKILLS = [
 
 def normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower()).strip()
+
+
+def load_text_from_file(file_path: str) -> str:
+    """Loads text from a .pdf, .docx, or .txt file."""
+    path = Path(file_path)
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    suffix = path.suffix.lower()
+
+    if suffix == ".pdf":
+        if not HAS_PYPDF:
+            raise ImportError(
+                "PDF support requires 'pypdf'. Install it with: pip install pypdf"
+            )
+        reader = PdfReader(str(path))
+        pages = [page.extract_text() or "" for page in reader.pages]
+        return "\n".join(pages).strip()
+
+    if suffix == ".docx":
+        if not HAS_DOCX:
+            raise ImportError(
+                "Word (.docx) support requires 'python-docx'. "
+                "Install it with: pip install python-docx"
+            )
+        doc = Document(str(path))
+        parts = [p.text for p in doc.paragraphs if p.text.strip()]
+        for table in doc.tables:
+            for row in table.rows:
+                row_text = " | ".join(
+                    cell.text.strip() for cell in row.cells if cell.text.strip()
+                )
+                if row_text:
+                    parts.append(row_text)
+        return "\n".join(parts).strip()
+
+    return path.read_text(encoding="utf-8", errors="ignore").strip()
 
 
 def extract_skills(text: str, skill_vocab: List[str] = COMMON_SKILLS) -> List[str]:
@@ -123,21 +174,46 @@ Provide a concise, actionable skill gap summary and 3 specific resume bullet-poi
     return response.choices[0].message.content.strip()
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Analyze a candidate resume (.pdf, .docx, .txt) against a job description."
+    )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        help="Path to resume file (.pdf, .docx, or .txt)",
+    )
+    parser.add_argument(
+        "--jd",
+        type=str,
+        help="Path to job description file (.pdf, .docx, or .txt)",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
-    sample_resume = """
-    Computer Science student experienced in Python, SQL, Pandas, NumPy, and Scikit-learn.
-    Built a machine learning classification model and explored basic NLP preprocessing.
-    Familiar with Git and REST APIs.
-    """
+    args = parse_args()
 
-    sample_jd = """
-    Looking for an AI / NLP Engineer with strong Python, NLP, Large Language Models (LLM),
-    RAG, embeddings, PyTorch, Docker, and SQL skills. Experience deploying ML/NLP services
-    and evaluating semantic similarity is a plus.
-    """
+    if args.resume:
+        resume_text = load_text_from_file(args.resume)
+    else:
+        resume_text = """
+        Computer Science student experienced in Python, SQL, Pandas, NumPy, and Scikit-learn.
+        Built a machine learning classification model and explored basic NLP preprocessing.
+        Familiar with Git and REST APIs.
+        """
 
-    report = analyze_skill_gap(sample_resume, sample_jd)
-    feedback = generate_llm_feedback(sample_resume, sample_jd, report)
+    if args.jd:
+        jd_text = load_text_from_file(args.jd)
+    else:
+        jd_text = """
+        Looking for an AI / NLP Engineer with strong Python, NLP, Large Language Models (LLM),
+        RAG, embeddings, PyTorch, Docker, and SQL skills. Experience deploying ML/NLP services
+        and evaluating semantic similarity is a plus.
+        """
+
+    report = analyze_skill_gap(resume_text, jd_text)
+    feedback = generate_llm_feedback(resume_text, jd_text, report)
 
     print("=== Resume & Skill Gap Analysis Report ===")
     print(f"Scoring Method       : {report['method_used']}")
