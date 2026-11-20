@@ -36,7 +36,9 @@ COMMON_SKILLS = [
     "transformers", "pytorch", "tensorflow", "scikit-learn", "pandas",
     "numpy", "data analysis", "data visualization", "git", "docker",
     "kubernetes", "aws", "azure", "gcp", "fastapi", "flask", "rest api",
-    "rag", "embeddings", "vector database", "prompt engineering", "mlops"
+    "rag", "embeddings", "vector database", "prompt engineering", "mlops",
+    "excel", "power bi", "tableau", "statistics", "etl",
+    "data warehousing", "dashboard", "eda", "exploratory data analysis"
 ]
 
 
