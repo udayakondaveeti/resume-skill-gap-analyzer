@@ -1,84 +1,154 @@
-from dataclasses import dataclass
-from typing import List
-import numpy as np
+import os
+import re
+from typing import List, Dict, Tuple
+
+try:
+    from sklearn.metrics.pairwise import cosine_similarity
+    from sentence_transformers import SentenceTransformer
+    HAS_SBERT = True
+except ImportError:
+    HAS_SBERT = False
+
+try:
+    from openai import OpenAI
+    HAS_OPENAI = True
+except ImportError:
+    HAS_OPENAI = False
 
 
-@dataclass
-class AnalysisResult:
-    match_percentage: float
-    matched_skills: List[str]
-    partial_skills: List[str]
-    missing_skills: List[str]
+COMMON_SKILLS = [
+    "python", "sql", "machine learning", "deep learning", "nlp",
+    "natural language processing", "large language models", "llm",
+    "transformers", "pytorch", "tensorflow", "scikit-learn", "pandas",
+    "numpy", "data analysis", "data visualization", "git", "docker",
+    "kubernetes", "aws", "azure", "gcp", "fastapi", "flask", "rest api",
+    "rag", "embeddings", "vector database", "prompt engineering", "mlops"
+]
 
 
-class ResumeSkillGapAnalyzer:
-    """
-    Semantic NLP and LLM-ready analyzer for resume matching and skill gap detection.
-    Swap _embed and _generate_llm_summary with real embedding/LLM APIs as needed.
-    """
+def normalize_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text.lower()).strip()
 
-    def _init_(self, match_threshold: float = 0.80, partial_threshold: float = 0.50):
-        self.match_threshold = match_threshold
-        self.partial_threshold = partial_threshold
 
-    def _embed(self, text: str) -> np.ndarray:
-        words = [w.strip(".,()[]:;\"'").lower() for w in text.split() if w.strip()]
-        vocab = sorted(set(words))
-        if not vocab:
-            return np.zeros(1)
-        vec = np.array([words.count(token) for token in vocab], dtype=float)
-        norm = np.linalg.norm(vec)
-        return vec / norm if norm > 0 else vec
+def extract_skills(text: str, skill_vocab: List[str] = COMMON_SKILLS) -> List[str]:
+    cleaned = normalize_text(text)
+    found = []
+    for skill in skill_vocab:
+        pattern = r"\b" + re.escape(skill.lower()) + r"\b"
+        if re.search(pattern, cleaned):
+            found.append(skill)
+    return sorted(set(found))
 
-    @staticmethod
-    def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-        size = min(len(a), len(b))
-        if size == 0:
-            return 0.0
-        va, vb = a[:size], b[:size]
-        denom = np.linalg.norm(va) * np.linalg.norm(vb)
-        return float(np.dot(va, vb) / denom) if denom > 0 else 0.0
 
-    def evaluate(self, resume_text: str, required_skills: List[str]) -> AnalysisResult:
-        matched, partial, missing = [], [], []
-        resume_vec = self._embed(resume_text)
-        resume_lower = resume_text.lower()
+def compute_semantic_similarity(resume_text: str, jd_text: str) -> Tuple[float, str]:
+    """Computes semantic similarity (0 to 100%) using Sentence-BERT if available."""
+    if HAS_SBERT:
+        model = SentenceTransformer("all-MiniLM-L6-v2")
+        embeddings = model.encode([resume_text, jd_text])
+        score = float(cosine_similarity([embeddings[0]], [embeddings[1]])[0][0])
+        percentage = round(max(0.0, min(1.0, score)) * 100, 2)
+        return percentage, "Sentence-BERT (all-MiniLM-L6-v2)"
 
-        for skill in required_skills:
-            if skill.lower() in resume_lower:
-                matched.append(skill)
-                continue
+    resume_tokens = set(re.findall(r"[a-z0-9+#.-]+", resume_text.lower()))
+    jd_tokens = set(re.findall(r"[a-z0-9+#.-]+", jd_text.lower()))
+    if not jd_tokens:
+        return 0.0, "Fallback Token Overlap"
+    overlap = len(resume_tokens & jd_tokens) / len(jd_tokens)
+    return round(min(1.0, overlap) * 100, 2), "Fallback Token Overlap"
 
-            similarity = self._cosine_similarity(resume_vec, self._embed(skill))
-            if similarity >= self.match_threshold:
-                matched.append(skill)
-            elif similarity >= self.partial_threshold:
-                partial.append(skill)
-            else:
-                missing.append(skill)
 
-        total = max(len(required_skills), 1)
-        score = ((len(matched) + 0.5 * len(partial)) / total) * 100
+def analyze_skill_gap(resume_text: str, jd_text: str) -> Dict:
+    resume_skills = extract_skills(resume_text)
+    required_skills = extract_skills(jd_text)
 
-        return AnalysisResult(
-            match_percentage=round(score, 2),
-            matched_skills=matched,
-            partial_skills=partial,
-            missing_skills=missing,
+    resume_set = set(resume_skills)
+    required_set = set(required_skills)
+
+    matched_skills = sorted(resume_set & required_set)
+    missing_skills = sorted(required_set - resume_set)
+    extra_skills = sorted(resume_set - required_set)
+
+    similarity_score, method_used = compute_semantic_similarity(resume_text, jd_text)
+
+    coverage_pct = (
+        round((len(matched_skills) / len(required_set)) * 100, 2)
+        if required_set
+        else 100.0
+    )
+
+    return {
+        "similarity_score_pct": similarity_score,
+        "skill_coverage_pct": coverage_pct,
+        "method_used": method_used,
+        "matched_skills": matched_skills,
+        "missing_skills": missing_skills,
+        "extra_skills": extra_skills,
+    }
+
+
+def generate_llm_feedback(resume_text: str, jd_text: str, analysis: Dict) -> str:
+    """Uses an LLM when OPENAI_API_KEY is configured; otherwise returns rule-based guidance."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key or not HAS_OPENAI:
+        if not analysis["missing_skills"]:
+            return "Strong skill alignment detected. Quantify project impact and metrics in your resume."
+        missing_str = ", ".join(analysis["missing_skills"])
+        return (
+            f"Focus on adding hands-on projects or experience demonstrating: {missing_str}. "
+            "Highlight measurable outcomes alongside matched technical skills."
         )
 
+    client = OpenAI(api_key=api_key)
+    prompt = f"""
+You are a technical career coach. Analyze this candidate resume against the job description.
 
-if _name_ == "_main_":
-    resume = (
-        "Backend developer skilled in Python, REST APIs, Docker, PostgreSQL, "
-        "and natural language processing pipelines."
+Semantic Similarity Score: {analysis['similarity_score_pct']}%
+Skill Coverage: {analysis['skill_coverage_pct']}%
+Matched Skills: {', '.join(analysis['matched_skills']) or 'None'}
+Missing Skills (Skill Gaps): {', '.join(analysis['missing_skills']) or 'None'}
+
+Resume:
+{resume_text}
+
+Job Description:
+{jd_text}
+
+Provide a concise, actionable skill gap summary and 3 specific resume bullet-point improvements.
+"""
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
     )
-    target_skills = ["Python", "Docker", "Kubernetes", "NLP", "LLM"]
+    return response.choices[0].message.content.strip()
 
-    analyzer = ResumeSkillGapAnalyzer()
-    report = analyzer.evaluate(resume, target_skills)
 
-    print(f"Match Score: {report.match_percentage}%")
-    print("Matched Skills:", report.matched_skills)
-    print("Partial Skills:", report.partial_skills)
-    print("Skill Gaps (Missing):", report.missing_skills)
+def main() -> None:
+    sample_resume = """
+    Computer Science student experienced in Python, SQL, Pandas, NumPy, and Scikit-learn.
+    Built a machine learning classification model and explored basic NLP preprocessing.
+    Familiar with Git and REST APIs.
+    """
+
+    sample_jd = """
+    Looking for an AI / NLP Engineer with strong Python, NLP, Large Language Models (LLM),
+    RAG, embeddings, PyTorch, Docker, and SQL skills. Experience deploying ML/NLP services
+    and evaluating semantic similarity is a plus.
+    """
+
+    report = analyze_skill_gap(sample_resume, sample_jd)
+    feedback = generate_llm_feedback(sample_resume, sample_jd, report)
+
+    print("=== Resume & Skill Gap Analysis Report ===")
+    print(f"Scoring Method       : {report['method_used']}")
+    print(f"Semantic Similarity  : {report['similarity_score_pct']}%")
+    print(f"Required Skill Match : {report['skill_coverage_pct']}%")
+    print(f"Matched Skills       : {', '.join(report['matched_skills']) or 'None'}")
+    print(f"Missing Skills (Gaps): {', '.join(report['missing_skills']) or 'None'}")
+    print(f"Additional Skills    : {', '.join(report['extra_skills']) or 'None'}")
+    print("\n=== Recommendations ===")
+    print(feedback)
+
+
+if __name__ == "__main__":
+    main()
