@@ -1,0 +1,26 @@
+{
+  "semantic_similarity": 44.54,
+  "matched_skills": [
+    "data analysis",
+    "sql"
+  ],
+  "missing_skills": [
+    "data visualization",
+    "eda",
+    "exploratory data analysis",
+    "fastapi",
+    "flask",
+    "git",
+    "machine learning",
+    "numpy",
+    "pandas",
+    "python",
+    "rest api",
+    "scikit-learn"
+  ],
+  "additional_skills": [
+    "power bi"
+  ],
+  "required_skill_match": 14.29,
+  "recommendations": "Focus on adding hands-on projects or experience demonstrating: data visualization, eda, exploratory data analysis, fastapi, flask, git, machine learning, numpy, pandas, python, rest api, scikit-learn. Highlight measurable outcomes alongside matched technical skills."
+}
